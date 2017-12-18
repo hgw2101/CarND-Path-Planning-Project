@@ -38,6 +38,8 @@ double distance(double x1, double y1, double x2, double y2)
 {
 	return sqrt((x2-x1)*(x2-x1)+(y2-y1)*(y2-y1));
 }
+
+// given the vehicle's position, find the cloest waypoint in the map
 int ClosestWaypoint(double x, double y, const vector<double> &maps_x, const vector<double> &maps_y)
 {
 
@@ -242,8 +244,17 @@ int main() {
           	vector<double> next_x_vals;
           	vector<double> next_y_vals;
 
-
           	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
+
+						// car moves 50 times a second, 0.447 meter per move, 22.35m/s, 1 mile = 1609.3m, or .01388 mile per second, or 50mph, the speed limit
+						// moving the vehicle in a straight line in the cartesian coordinates
+						double dist_inc = 0.447; // roughly 50mph in a 50 step line
+						for(int i = 0; i < 50; i++)
+						{
+							next_x_vals.push_back(car_x+(dist_inc*i)*cos(deg2rad(car_yaw)));
+							next_y_vals.push_back(car_y+(dist_inc*i)*sin(deg2rad(car_yaw)));
+						}
+
           	msgJson["next_x"] = next_x_vals;
           	msgJson["next_y"] = next_y_vals;
 
