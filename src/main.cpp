@@ -8,6 +8,7 @@
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
+#include "spline.h"
 
 using namespace std;
 
@@ -165,6 +166,11 @@ vector<double> getXY(double s, double d, const vector<double> &maps_s, const vec
 
 }
 
+// 1) need to figure out why exception is happening with the code below
+// 2) check out "aaron's" suggestion to use far spaced points, and then fit spline and then grab points in the spline polynomial
+// 3) review behavioral planning on implementing cost function, and how to shift from vehicle coordinates to map coordinates
+// 4) try solve this using finite state machine 
+
 int main() {
   uWS::Hub h;
 
@@ -239,6 +245,10 @@ int main() {
           	// Sensor Fusion Data, a list of all other cars on the same side of the road.
           	auto sensor_fusion = j[1]["sensor_fusion"];
 
+						int lane = 1;
+						double ref_vel = 49.5; // in mph
+						int previous_path_size = previous_path_x.size();
+
           	json msgJson;
 
           	vector<double> next_x_vals;
@@ -246,13 +256,99 @@ int main() {
 
           	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
 
-						// car moves 50 times a second, 0.447 meter per move, 22.35m/s, 1 mile = 1609.3m, or .01388 mile per second, or 50mph, the speed limit
-						// moving the vehicle in a straight line in the cartesian coordinates
-						double dist_inc = 0.447; // roughly 50mph in a 50 step line
-						for(int i = 0; i < 50; i++)
-						{
-							next_x_vals.push_back(car_x+(dist_inc*i)*cos(deg2rad(car_yaw)));
-							next_y_vals.push_back(car_y+(dist_inc*i)*sin(deg2rad(car_yaw)));
+						vector<double> ptsx;
+						vector<double> ptsy;
+
+						// reference points
+						double ref_x = car_x;
+						double ref_y = car_y;
+						double ref_yaw = deg2rad(car_yaw);
+
+						if (previous_path_size < 2) {
+							// zero or only one previous point, backdate previous path points tangent to the car's angle:
+							double prev_car_x = car_x - cos(car_yaw);
+							double prev_car_y = car_y - sin(car_yaw);
+
+							ptsx.push_back(prev_car_x);
+							ptsx.push_back(car_x);
+							ptsy.push_back(prev_car_y);
+							ptsy.push_back(car_y);
+						} else {
+							// previous points available, take the second last and second last points and push to ptsx and ptsy and reset ref points
+							ref_x = previous_path_x.back();
+							ref_y = previous_path_y.back();
+							double ref_x_second_last = previous_path_x[previous_path_size-2];
+							double ref_y_second_last = previous_path_y[previous_path_size-2];
+							// update ref_yaw using atan2
+							ref_yaw = atan2(ref_y - ref_y_second_last, ref_x - ref_x_second_last);
+
+							ptsx.push_back(ref_x_second_last);
+							ptsx.push_back(ref_x);
+							ptsy.push_back(ref_y_second_last);
+							ptsy.push_back(ref_y);
+						}
+
+						// now create 3 new points based on frenet coordinates, 30m 60m and 90m apart
+						vector<double> next_wp0 = getXY(car_s + 30, (double)2+4*lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+						vector<double> next_wp1 = getXY(car_s + 60, (double)2+4*lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+						vector<double> next_wp2 = getXY(car_s + 90, (double)2+4*lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+
+						ptsx.push_back(next_wp0[0]);
+						ptsx.push_back(next_wp1[0]);
+						ptsx.push_back(next_wp2[0]);
+
+						ptsy.push_back(next_wp0[1]);
+						ptsy.push_back(next_wp1[1]);
+						ptsy.push_back(next_wp2[1]);
+
+						// transform from map coordinates to vehicle coordinates, similar to the transform function in MPC project
+						for(int i=0; i<ptsx.size(); i++) {
+							// TODO: write transform() function
+							double shift_x = ptsx[i] - ref_x;
+							double shift_y = ptsy[i] - ref_y;
+
+							ptsx[i] = shift_x * cos(-ref_yaw) - shift_y * sin(-ref_yaw);
+							ptsy[i] = shift_x * sin(-ref_yaw) + shift_y * cos(-ref_yaw);
+						}
+
+						// spline for smoother path
+						tk::spline s;
+
+						s.set_points(ptsx, ptsy);
+
+						// start with all the previous points
+						for(int i=0; i<previous_path_size; i++) {
+							next_x_vals.push_back(previous_path_x[i]);
+							next_y_vals.push_back(previous_path_y[i]);
+						}
+
+						// calculate how many additional points based on the spline projection, and location of each point, to next_x_vals and next_y_vals
+						double target_x = 30.0; // arbitrary
+						double target_y = s(target_x);
+						double target_dist = sqrt(target_x*target_x + target_y*target_y); // end point from car's current location until the spline point 30.0m along the x-axis (map coordinate)
+
+						double x_addon = 0;
+
+						for(int i=0; i<50-previous_path_size; i++) {
+							// N is how many evenly spaced projected waypoints between car's current position plus target_dist, so it's
+							// target_dist divided by 0.02, which is time in seconds (20ms), multiplied by rel_vel in m/s
+							double N = target_dist/(.02*ref_vel*.44704);
+							double x_point = x_addon + target_x/N;
+							double y_point = s(x_point);
+
+							// reset x_addon
+							x_addon = x_point;
+
+							// local variables for transforming back to map coordinates from vehicle coordinates, not to be confused with ref_x and ref_y, // which are coordinates that help us get back to the map coordinates
+							double x_ref = x_point;
+							double y_ref = y_point;
+
+							// back to map coordinates; TODO: write transform() function
+							x_point = (x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw)) + ref_x;
+							y_point = (x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw)) + ref_y;
+
+							next_x_vals.push_back(x_point);
+							next_y_vals.push_back(y_point);
 						}
 
           	msgJson["next_x"] = next_x_vals;
