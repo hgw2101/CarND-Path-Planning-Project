@@ -249,6 +249,37 @@ int main() {
 						double ref_vel = 49.5; // in mph
 						int previous_path_size = previous_path_x.size();
 
+						if (previous_path_size > 0) {
+							car_s = end_path_s;
+						}
+
+						// Check if another car is too close
+						bool too_close = false;
+
+						// loop through all the sensor fusion data, i.e. all the other vehicles detected
+						for(int i=0; i<sensor_fusion.size(); i++) {
+							// check if this car is in our lane
+							float d = sensor_fusion[i][6];
+							// since each lane is 4 meters wide, add 2 to get to the center of the lane
+							if(d < 2+4*lane+2 && d > 2+4*lane-2) {
+								double vx = sensor_fusion[i][3];
+								double vy = sensor_fusion[i][4];
+								double check_car_speed = sqrt(vx*vx+vy*vy); // true speed of the detected vehicle
+								double check_car_s = sensor_fusion[i][5];
+
+								// predict where the car will be in the future, 0.02*check_car_speed gives us distance traveled
+								// in each time increment of 0.02 second, and there are previous_path_size number of increments,
+								// so this product, previous_path_size*0.02*check_car_speed, gives us where this detected car, check_car,
+								// is going to be at the end of previous_path's trajectory
+								check_car_s += (double)previous_path_size*0.02*check_car_speed;
+
+								// if detected car is in front of us and is within 30 meters, reduce speed
+								if (check_car_s > car_s && (check_car_s-car_s) < 30) {
+									ref_vel = 29.5;
+								}
+							}
+						}
+
           	json msgJson;
 
           	vector<double> next_x_vals;
