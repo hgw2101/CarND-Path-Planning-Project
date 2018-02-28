@@ -249,38 +249,73 @@ int main() {
           	// Sensor Fusion Data, a list of all other cars on the same side of the road.
           	auto sensor_fusion = j[1]["sensor_fusion"];
 
+						// constants
+						double max_vel = 49.5; //mph
+						double max_acc = .224; //5m/s^2, under the 10m/s^2 requirement
+						double time_inc = 0.02; // time, in second, it takes to go from one point in the path to the next
+
 						int previous_path_size = previous_path_x.size();
 
 						if (previous_path_size > 0) {
 							car_s = end_path_s;
 						}
 
-						// Check if another car is too close
+						// initialize for finite state machine
 						bool too_close = false;
+						bool can_turn_left = false;
+						bool can_turn_right = false;
+						int check_car_lane = 1;
+
+						// track all vehicles in adjacent lanes
+						vector <bool> left_turns;
+						vector <bool> right_turns;
 
 						// loop through all the sensor fusion data, i.e. all the other vehicles detected
 						for(int i=0; i<sensor_fusion.size(); i++) {
 							// check if this car is in our lane
 							float d = sensor_fusion[i][6];
-							// since each lane is 4 meters wide, add 2 to get to the center of the lane
-							if(d < 2+4*lane+2 && d > 2+4*lane-2) {
-								double vx = sensor_fusion[i][3];
-								double vy = sensor_fusion[i][4];
-								double check_car_speed = sqrt(vx*vx+vy*vy); // true speed of the detected vehicle
-								double check_car_s = sensor_fusion[i][5];
 
-								// predict where the car will be in the future, 0.02*check_car_speed gives us distance traveled
-								// in each time increment of 0.02 second, and there are previous_path_size number of increments,
-								// so this product, previous_path_size*0.02*check_car_speed, gives us where this detected car, check_car,
-								// is going to be at the end of previous_path's trajectory
-								check_car_s += (double)previous_path_size*0.02*check_car_speed;
+							if (d >= 0 && d < 4) {
+								check_car_lane = 0; // left lane
+							} else if (d >= 4 && d < 8) {
+								check_car_lane = 1; // middle lane
+							} else {
+								check_car_lane = 2;
+							}
 
+							double vx = sensor_fusion[i][3];
+							double vy = sensor_fusion[i][4];
+							double check_car_speed = sqrt(vx*vx+vy*vy); // true speed of the detected vehicle
+							double check_car_s = sensor_fusion[i][5];
+
+							// predict where the car will be in the future, time_inc*check_car_speed gives us distance traveled
+							// in each time increment of time_inc second, and there are previous_path_size number of increments,
+							// so this product, previous_path_size*time_inc*check_car_speed, gives us where this detected car, check_car,
+							// is going to be at the end of previous_path's trajectory
+							check_car_s += (double)previous_path_size*time_inc*check_car_speed;
+							int lane_diff = check_car_lane - lane;
+							double s_dist_diff = abs(check_car_s - car_s);
+							bool can_turn = s_dist_diff > 30;
+
+							// behavioral logic
+							if (lane_diff == 0) {
+								// check if car is too close
 								// if detected car is in front of us and is within 30 meters, reduce speed
-								if (check_car_s > car_s && (check_car_s-car_s) < 30) {
+								if (check_car_s > car_s && (s_dist_diff) < 30) {
 									too_close = true;
 								}
+							} else if (lane_diff == -1) {
+								// car is in the lane left of us, can turn left if it's at least 30m away in the s direction
+								left_turns.push_back(can_turn);
+							} else if (lane_diff == 1) {
+								// car is in the lane right of us, can turn left if it's at least 30m away in the s direction
+								right_turns.push_back(can_turn);
 							}
 						}
+
+						// can turn if confirm no cars are in adjacent lanes
+						can_turn_left = std::all_of(left_turns.begin(), left_turns.end(), [](bool can_turn) {return can_turn;});
+						can_turn_right = std::all_of(right_turns.begin(), right_turns.end(), [](bool can_turn) {return can_turn;});
 
           	json msgJson;
 
@@ -364,11 +399,22 @@ int main() {
 
 						for(int i=0; i<50-previous_path_size; i++) {
 							if (too_close) {
-								// cout<<"too_close!!!"<<endl;
-								ref_vel -= .224; // TODO: put this in a constant, 5m/s^2, under the 10m/s^2 requirement
-							} else if (ref_vel < 49.5) { //TODO: put 49.5 in a constant
-								// cout<<"ref_vel < 49.5!!!"<<endl;
-								ref_vel += .224;
+								// first check if can change lanes
+								// cout<<"too_close"<<endl;
+								if (can_turn_left && lane > 0) {
+									// cout<<"can_turn_left"<<endl;
+									lane -= 1;
+								} else if (can_turn_right && lane < 2) {
+									// cout<<"can_turn_right"<<endl;
+									lane += 1;
+								} else {
+									// cout<<"reduce speed!!"<<endl;
+									// otherwise, slow down
+									ref_vel -= max_acc;
+								}
+							} else if (ref_vel < max_vel) {
+								// cout<<"INCREASE speed!!"<<endl;
+								ref_vel += max_acc;
 							}
 
 							// N is how many evenly spaced projected waypoints between car's current position plus target_dist, so it's
