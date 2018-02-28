@@ -166,11 +166,6 @@ vector<double> getXY(double s, double d, const vector<double> &maps_s, const vec
 
 }
 
-// 1) need to figure out why exception is happening with the code below
-// 2) check out "aaron's" suggestion to use far spaced points, and then fit spline and then grab points in the spline polynomial
-// 3) review behavioral planning on implementing cost function, and how to shift from vehicle coordinates to map coordinates
-// 4) try solve this using finite state machine 
-
 int main() {
   uWS::Hub h;
 
@@ -252,7 +247,8 @@ int main() {
 						// constants
 						double max_vel = 49.5; //mph
 						double max_acc = .224; //5m/s^2, under the 10m/s^2 requirement
-						double time_inc = 0.02; // time, in second, it takes to go from one point in the path to the next
+						double time_inc = .02; // time, in second, it takes to go from one point in the path to the next
+						double dist_inc = .44704;
 
 						int previous_path_size = previous_path_x.size();
 
@@ -400,26 +396,21 @@ int main() {
 						for(int i=0; i<50-previous_path_size; i++) {
 							if (too_close) {
 								// first check if can change lanes
-								// cout<<"too_close"<<endl;
-								if (can_turn_left && lane > 0) {
-									// cout<<"can_turn_left"<<endl;
+								if (can_turn_left && lane > 0) { //TODO: can probably put the lane > 0 logic above as a part of can_turn_left
 									lane -= 1;
 								} else if (can_turn_right && lane < 2) {
-									// cout<<"can_turn_right"<<endl;
 									lane += 1;
 								} else {
-									// cout<<"reduce speed!!"<<endl;
 									// otherwise, slow down
 									ref_vel -= max_acc;
 								}
 							} else if (ref_vel < max_vel) {
-								// cout<<"INCREASE speed!!"<<endl;
 								ref_vel += max_acc;
 							}
 
 							// N is how many evenly spaced projected waypoints between car's current position plus target_dist, so it's
 							// target_dist divided by 0.02, which is time in seconds (20ms), multiplied by rel_vel in m/s
-							double N = target_dist/(.02*ref_vel*.44704);
+							double N = target_dist/(time_inc*ref_vel*dist_inc);
 							double x_point = x_addon + target_x/N;
 							double y_point = s(x_point);
 
